@@ -1,4 +1,4 @@
-package com.qianyi.core.model.flow.node;
+package com.qianyi.core.model.matter;
 
 /**
  * 节点执行状态枚举
@@ -8,7 +8,6 @@ package com.qianyi.core.model.flow.node;
  */
 public enum NodeStatus {
     TRIGGERED,
-    RUNNING,
     WAITING,
     COMPLETED,
     ERROR

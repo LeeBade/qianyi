@@ -12,12 +12,8 @@ import java.util.Map;
  * @since 2026-06-18
  */
 @Data
-public class Action {
+public class RpcAction {
     private String protocol;
     // 参数随协议变化，使用 Map 承载
     private Map<String, Object> params = Map.of();
-
-    public void setParams(Map<String, Object> params) {
-        this.params = params == null ? Map.of() : params;
-    }
 }

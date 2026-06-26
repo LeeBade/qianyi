@@ -1,4 +1,4 @@
-package com.qianyi.core.model.flow.node;
+package com.qianyi.core.model.matter;
 
 
 import lombok.Data;
@@ -11,8 +11,9 @@ import lombok.Data;
  */
 @Data
 public class NodeExecutionState {
-
     private String parentNodeId;
-
     private NodeStatus status;
+    private String message;
+    private ActionChainName currentChain;
+    private int cursor;
 }

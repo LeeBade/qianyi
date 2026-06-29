@@ -29,7 +29,10 @@ RocketMQ 客户端回调 MessageQueueListener，通知当前实例
 - 恢复执行复用正常消费流程，禁止单独实现一套恢复逻辑
 - 只投递消息，不直接执行恢复，在单独的虚拟线程中运行
 - queueId 字段已在 MongoDB 建立索引，保证查询性能
-
+- 新实例接管 MessageQueue 后，RecoveryRunner 在投递
+  RECOVERY 消息前，必须先将归属于新接管 MessageQueue
+  的所有 MatterContext 的 queueId 更新为新的
+  MessageQueue ID，这是僵尸进程写入防御的前提
 ## 已知边界
 
 Rebalance 触发到 RecoveryRunner 投递完成之间存在

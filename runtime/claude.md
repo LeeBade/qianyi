@@ -54,6 +54,10 @@ public Object getContextValue(String contextKey) {
 **执行原则**
 - 纯内存操作只修改内存，cursor 在内存中推进
 - 有副作用的操作：先持久化所有内存修改和 cursor，再执行副作用
+- 所有持久化操作必须携带当前 queueId 作为写入条件，
+    - MongoDB 原子校验 queueId 一致才允许写入，
+    - 校验失败说明当前实例已失去该 Matter 的执行归属， 
+    - 立即终止执行，不做任何修复尝试
 - ACK 时机：写入 TRIGGERED 后立即 ACK，
   RocketMQ 的 at-least-once 覆盖消费到写 TRIGGERED 的窗口，
   写 TRIGGERED 之后的恢复不依赖 RocketMQ 重投，

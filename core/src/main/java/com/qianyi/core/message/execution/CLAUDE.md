@@ -20,7 +20,7 @@ ConsumerGroup：runtime-consumer-group
 | FIRST_TRIGGER | 节点在 executionStates 中无记录    | 任何已有状态                    |
 | TASK_RETRY    | 节点状态为 ERROR                 | 其他状态                      |
 | HUMAN_RESUME  | 节点状态为 WAITING               | 其他状态                      |
-| RECOVERY      | 节点状态为 TRIGGERED             | 其他状态                      |
+| RECOVERY      | 节点状态为 TRIGGERED 且（triggeredEpoch < currentEpoch 或 triggeredEpoch 为 null） | 其他状态，包括 triggeredEpoch >= currentEpoch |
 | （所有类型）      | -                           | TRIGGERED / COMPLETED 均拒绝 |
 
 ## 扩展规范

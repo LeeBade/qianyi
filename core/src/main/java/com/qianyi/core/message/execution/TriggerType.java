@@ -6,6 +6,8 @@ package com.qianyi.core.message.execution;
  * FIRST_TRIGGER：首次触发，节点在executionStates中无记录时放行
  * TASK_RETRY   ：人工重试，节点状态为ERROR时放行
  * HUMAN_RESUME ：人工唤醒，节点状态为WAITING时放行
+ * RECOVERY     ：崩溃恢复，节点状态为TRIGGERED且
+ *                （triggeredEpoch {@code <} currentEpoch 或 triggeredEpoch 为 null）时放行
  *
  * 幂等守卫以triggerType和当前节点状态联合判断，
  * TRIGGERED和COMPLETED状态下任何triggerType均被拒绝
@@ -16,5 +18,6 @@ package com.qianyi.core.message.execution;
 public enum TriggerType {
     FIRST_TRIGGER,
     TASK_RETRY,
-    HUMAN_RESUME
+    HUMAN_RESUME,
+    RECOVERY
 }

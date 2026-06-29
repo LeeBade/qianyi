@@ -31,4 +31,10 @@ public class MatterContext {
     private Map<String, NodeExecutionState> executionStates = Map.of();
 
     private String queueId;
+
+    /**
+     * 单调递增的归属纪元，RecoveryRunner 接管时递增。
+     * 所有持久化操作必须校验 epoch 归属当前实例，校验失败立即终止执行。
+     */
+    private long epoch = 0;
 }

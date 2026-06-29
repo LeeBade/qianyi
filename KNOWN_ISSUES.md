@@ -5,7 +5,7 @@
 
 ---
 
-## 漏洞一：Rebalance 窗口期内僵尸进程脑裂
+## 漏洞一：Rebalance 窗口期内僵尸进程脑裂 ✅ RESOLVED
 
 ### 背景
 
@@ -41,55 +41,55 @@ MessageQueue ID，并投递 RECOVERY 消息恢复孤儿节点执行。
 RecoveryRunner 更新，僵尸进程的 queueId 前置校验通过，
 与新实例同时执行同一个 Matter 的同一个节点，产生脑裂。
 
-### 已有防御
+具体场景：
+1. 僵尸进程执行到事务消息投递步骤，cursor 持久化作为本地事务提交
+2. 下游节点 CascadeExecuteMessage 对消费方可见，无法撤回
+3. RecoveryRunner 随后投递 RECOVERY 消息
+4. 下游节点先收到 FIRST_TRIGGER（僵尸投递），写入 TRIGGERED
+5. RECOVERY 到达时幂等守卫检查状态为 TRIGGERED，放行
+6. 下游节点被执行两次
 
-queueId 前置校验覆盖了大部分场景：
+### 解决方案：Epoch 栅栏
 
-- **Rebalance 完成后苏醒**：RecoveryRunner 已更新 queueId，
-  僵尸进程校验失败，写入被拒绝，执行终止，完全防御
-- **纯状态写入的窗口期穿透**：即使僵尸进程在窗口期内写入
-  成功，下一次持久化时 queueId 已更新，写入被拒绝，
-  最多一个步骤被重复执行，后续全部被拦截
+引入 MatterContext.epoch 单调递增计数器作为栅栏令牌：
 
-### 残留漏洞
+1. **NodeExecutionState 新增 triggeredEpoch 字段**：
+   节点首次触发时记录当前 epoch 快照
 
-**场景：Rebalance 进行中，僵尸进程执行到事务消息投递步骤**
+2. **RecoveryRunner FENCE 阶段**（在所有其他操作之前）：
+   原子递增所有接管 MatterContext 的 epoch
 
-事务消息投递步骤的逻辑是：cursor 持久化作为本地事务，
-commit 后下游节点的 CascadeExecuteMessage 对消费方可见。
+3. **RECOVERY 幂等守卫收紧**：
+   放行条件从"状态为 TRIGGERED"收紧为
+   "状态为 TRIGGERED 且（triggeredEpoch < currentEpoch
+   或 triggeredEpoch 为 null）"
 
-如果僵尸进程在 queueId 尚未更新时执行到此步骤：
-1. queueId 校验通过
-2. 本地事务提交成功
-3. 下游节点消息 commit，已投递到 RocketMQ，无法撤回
+4. **所有写入增加 epoch 校验**：
+   MongoDB 写入 filter 从 `{_id, queueId}` 扩展为
+   `{_id, queueId, epoch}`
 
-随后 RecoveryRunner 更新 queueId，投递 RECOVERY 消息，
-下游节点收到两条消息：
-- 僵尸进程投递的 FIRST_TRIGGER
-- RecoveryRunner 投递的 RECOVERY
+### 解决效果
 
-若 FIRST_TRIGGER 先到：下游节点写入 TRIGGERED，
-RECOVERY 到达时幂等守卫检查状态为 TRIGGERED，
-按 RECOVERY 规则放行，下游节点被执行两次。
+- Rebalance 完成后苏醒：FENCE 已完成，epoch 已递增，
+  僵尸进程写入被 epoch 校验拦截，执行终止 → 完全防御
+- Rebalance 进行中苏醒并完成事务消息投递：
+  FIRST_TRIGGER 在 FENCE 后写入 triggeredEpoch >= currentEpoch，
+  RECOVERY 幂等守卫拒绝放行 → 下游节点只执行一次
+- 存量文档（triggeredEpoch 为 null）：QUERY 阶段
+  triggeredEpoch 不存在视为接管前触发，正常恢复
 
-### 触发条件
+### 残留风险
 
-需同时满足以下所有条件，概率极低：
-1. 发生长时间 GC 停顿或网络停顿
-2. 停顿期间恰好触发 Rebalance
-3. 停顿结束时 Rebalance 尚未完成，queueId 尚未更新
-4. 僵尸进程恰好执行到事务消息投递步骤
-5. 下游节点先收到僵尸进程的 FIRST_TRIGGER
-
-### 当前结论
-
-记录为已知边界，暂不处理。触发条件极为苛刻，
-业界成熟系统也接受类似的最终一致性边界。
-待后续演进时考虑引入 Fencing Token 或分布式锁机制。
+FENCE 完成前的极端窗口：僵尸进程在 FENCE 执行前完成
+事务消息投递且 FIRST_TRIGGER 已被消费写入（triggeredEpoch
+为旧值 < recoveryEpoch），RECOVERY 仍会放行。
+此窗口仅存在于 FENCE updateMany 执行期间（通常 < 100ms），
+且需 zombie 恰好在此窗口内完成事务提交 + 消息消费 +
+TRIGGERED 写入三个步骤。概率极低，业界成熟系统也接受。
 
 ---
 
-## 漏洞二：UNSAFE Task RPC 调用的重复执行
+## 漏洞二：UNSAFE Task RPC 调用的重复执行 🟡 MITIGATED
 
 ### 背景
 
@@ -127,26 +127,47 @@ RPC 调用是外部系统操作，不在 MongoDB 的事务边界内。
 校验归属可以做到原子，但无法把 RPC 调用纳入同一个原子操作。
 跨系统操作没有全局原子性，这是分布式系统的本质限制。
 
+### 缓解措施
+
+**epoch 栅栏**（漏洞一的解决方案）缩小了僵尸进程的写入窗口：
+FENCE 完成后，僵尸进程的后续写入全部被拦截。
+但 RPC 调用仍可能在 FENCE 前发出。
+
+**rpcDispatched 标记**（NodeExecutionState 新增字段）：
+UNSAFE Task 在执行 RPC 前，将 rpcDispatched 与 TRIGGERED
+写入合并为单次原子 `$set`。
+
+RecoveryRunner 发现 UNSAFE Task 的 TRIGGERED 节点且
+rpcDispatched=true 时：
+- 不投递 RECOVERY（禁止自动恢复）
+- 写入 ERROR 并通知业务人员："RPC was dispatched but
+  completion unconfirmed — check external system before TASK_RETRY"
+
+这确保了 **UNSAFE RPC 不会被自动重复执行**。
+人工 TASK_RETRY 由业务人员确认外部系统状态后触发。
+
 ### 触发条件
 
 需同时满足：
 1. 发生长时间 GC 停顿或网络停顿
 2. 停顿期间恰好触发 Rebalance
-3. 停顿结束时 Rebalance 尚未完成，queueId 尚未更新
+3. 停顿结束时 FENCE 尚未完成
 4. 当前节点是 UNSAFE Task
-5. 僵尸进程和新实例同时执行到 RPC 调用步骤
+5. 僵尸进程在 FENCE 前完成 TRIGGERED + rpcDispatched 原子写入
+   并发出 RPC 调用
+6. 业务人员后续触发 TASK_RETRY（未经确认外部系统状态）
 
 ### 当前结论
 
-Runtime 层面无法完全消灭此漏洞。
+Runtime 层面无法完全消灭此漏洞，已做到最大程度的自动防御：
+- epoch 栅栏缩小窗口
+- rpcDispatched 标记防止自动重复执行
+- UNSAFE Task retry_max_attempts 强制为 1
 
-当前缓解措施：
-- queueId 前置校验尽可能缩小窗口
-- UNSAFE Task retry_max_attempts 强制为 1，减少重复调用机会
-
-根本解法需要在 Task 设计层面由 FDE 保证：
-**声明为 UNSAFE 的 Task，其 RPC 端点必须在业务层面具备
-幂等能力**，即使被重复调用，业务结果也是正确的。
+**根本解法需要在 Task 设计层面由 FDE 保证**：
+声明为 UNSAFE 的 Task，其 RPC 端点必须在业务层面具备
+幂等能力，即使被重复调用，业务结果也是正确的。
 这是 FDE 注册 UNSAFE Task 时必须承担的责任。
 
-记录为已知边界，在 Task 资产规范中补充 FDE 责任声明。
+记录为已缓解但不可完全消灭的边界，
+在 Task 资产规范中保留 FDE 责任声明。
